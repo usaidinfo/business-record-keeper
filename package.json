@@ -1,5 +1,5 @@
 {
-  "name": "my-expo-app",
+  "name": "business-record-keeper",
   "version": "1.0.0",
   "scripts": {
     "android": "expo start --android",
@@ -11,24 +11,43 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@nozbe/watermelondb": "^0.27.1",
+    "@react-native-async-storage/async-storage": "^1.24.0",
+    "@react-native-community/netinfo": "^11.4.1",
+    "@react-navigation/native": "^7.0.19",
+    "@react-navigation/stack": "^7.2.3",
     "expo": "^52.0.41",
     "expo-status-bar": "~2.0.1",
-    "nativewind": "latest",
+    "nativewind": "^4.1.23",
+    "pouchdb-adapter-asyncstorage": "^6.4.1",
+    "pouchdb-adapter-http": "^9.0.0",
+    "pouchdb-adapter-react-native-sqlite": "^4.0.5",
+    "pouchdb-replication": "^9.0.0",
     "react": "18.3.1",
     "react-native": "0.76.7",
-    "react-native-reanimated": "3.16.2",
-    "react-native-safe-area-context": "4.12.0"
+    "react-native-gesture-handler": "^2.24.0",
+    "react-native-get-random-values": "^1.8.0",
+    "react-native-quick-sqlite": "^8.2.7",
+    "react-native-reanimated": "^3.16.2",
+    "react-native-safe-area-context": "^4.12.0",
+    "react-native-screens": "^4.10.0",
+    "react-native-sqlite-storage": "^6.0.1",
+    "rxdb": "^16.8.1",
+    "rxjs": "^7.8.0",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
+    "@babel/plugin-proposal-decorators": "^7.25.9",
     "@types/react": "~18.3.12",
+    "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^7.7.0",
     "@typescript-eslint/parser": "^7.7.0",
     "eslint": "^8.57.0",
     "eslint-config-universe": "^12.0.1",
     "prettier": "^3.2.5",
     "prettier-plugin-tailwindcss": "^0.5.11",
-    "tailwindcss": "^3.4.0",
+    "tailwindcss": "^3.4.17",
     "typescript": "~5.3.3"
   },
   "eslintConfig": {

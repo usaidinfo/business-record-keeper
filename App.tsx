@@ -1,12 +1,12 @@
-import { ScreenContent } from 'components/ScreenContent';
+import 'react-native-get-random-values';
 import { StatusBar } from 'expo-status-bar';
-
+import AppNavigator from './src/navigation/AppNavigator';
 import './global.css';
 
 export default function App() {
   return (
     <>
-      <ScreenContent title="Home" path="App.tsx" />
+      <AppNavigator />
       <StatusBar style="auto" />
     </>
   );
