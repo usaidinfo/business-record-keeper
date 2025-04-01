@@ -20,18 +20,25 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
   useEffect(() => {
     loadBusinesses();
   }, []);
+
+
   
 
   const loadBusinesses = async () => {
     try {
       const db = await getDatabase();
+      if (!db || !db.businesses) {
+        console.log('Database or businesses collection not available');
+        setLoading(false);
+        return;
+      }
       const results = await db.businesses.find().exec();
       setBusinesses(results);
       setLoading(false);
     } catch (error) {
       console.error('Error loading businesses:', error);
       setLoading(false);
-      Alert.alert('Error', 'Failed to load businesses');
+      Alert.alert('Error', 'Failed to load businesses. Please restart the app.');
     }
   };
 
@@ -43,33 +50,79 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
     
     try {
       const db = await getDatabase();
+      if (!db || !db.businesses) {
+        Alert.alert('Error', 'Database not ready. Please try again.');
+        return;
+      }
+  
+      const businessId = uuidv4();
+      
       const newBusiness = await db.businesses.insert({
-        id: uuidv4(),
+        id: businessId,
         name: newBusinessName.trim()
       });
-      
-      // Sync with server
-      await ReplicationService.createBusiness({
-        _id: newBusiness.id,
-        name: newBusiness.name
-      });
-      
+  
+      try {
+        const serverResult = await ReplicationService.createBusiness({
+          _id: businessId,
+          name: newBusinessName.trim()
+        });
+  
+        if (serverResult && serverResult.rev) {
+          await newBusiness.update({
+            $set: {
+              _rev: serverResult.rev
+            }
+          });
+        }
+      } catch (error) {
+        console.log('Server sync failed, will sync later');
+      }
+  
+      setBusinesses(prev => [...prev, newBusiness]);
       setNewBusinessName('');
       setShowForm(false);
-      loadBusinesses();
     } catch (error) {
       console.error('Error adding business:', error);
-      Alert.alert('Error', 'Failed to add business');
+      Alert.alert('Error', 'Failed to add business. Please try again.');
     }
   };
 
   const handleDeleteBusiness = async (business: BusinessDocument) => {
     try {
-      await business.remove();
+      const db = await getDatabase();
       
-      await ReplicationService.deleteBusiness(business.id, business.get('_rev'));
-      
-      loadBusinesses();
+      // Delete associated articles locally first
+      const articles = await db.articles.find().where('business_id').eq(business.id).exec();
+      for (const article of articles) {
+        await article.update({
+          $set: { _deleted: true }
+        });
+      }
+  
+      // Mark business for deletion locally
+      const businessDoc = await db.businesses.findOne(business.id).exec();
+      if (businessDoc) {
+        await businessDoc.update({
+          $set: { _deleted: true }
+        });
+      }
+  
+      // Try server delete if online
+      try {
+        await ReplicationService.deleteBusiness(business.id, business.get('_rev'));
+        // If server delete successful, remove locally
+        if (businessDoc) {
+          await businessDoc.remove();
+        }
+        for (const article of articles) {
+          await article.remove();
+        }
+      } catch (error) {
+        console.log('Server delete failed, will sync later');
+      }
+  
+      await loadBusinesses();
     } catch (error) {
       console.error('Error deleting business:', error);
       Alert.alert('Error', 'Failed to delete business');

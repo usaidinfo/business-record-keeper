@@ -9,7 +9,8 @@ import { articleSchema, Article } from './models/articleSchema';
 import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv'; 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RxDBUpdatePlugin } from 'rxdb/plugins/update';
-import { replicateCouchDB } from 'rxdb/plugins/replication-couchdb';
+import { COUCHDB_URL } from '../services/ReplicationService';
+import NetworkService from '~/services/NetworkService';
 
 addRxPlugin(RxDBQueryBuilderPlugin);
 addRxPlugin(RxDBDevModePlugin);
@@ -101,6 +102,61 @@ async function loadPersistedData(db: RxDatabase<BusinessRecordDatabase>) {
   }
 }
 
+async function syncWithServer(db: RxDatabase<BusinessRecordDatabase>) {
+  try {
+    // First try to fetch from server
+    const [serverBusinesses, serverArticles] = await Promise.all([
+      fetch(`${COUCHDB_URL}business/_all_docs?include_docs=true`, {
+        headers: { 'Authorization': 'Basic ' + btoa('usaid:beast617796') }
+      }).then(r => r.json()).catch(() => ({ rows: [] })),
+      fetch(`${COUCHDB_URL}articles/_all_docs?include_docs=true`, {
+        headers: { 'Authorization': 'Basic ' + btoa('usaid:beast617796') }
+      }).then(r => r.json()).catch(() => ({ rows: [] }))
+    ]);
+
+    // Get local data
+    const localBusinesses = JSON.parse(await AsyncStorage.getItem('businesses') || '[]');
+    const localArticles = JSON.parse(await AsyncStorage.getItem('articles') || '[]');
+
+    // Sync businesses
+    for (const business of localBusinesses) {
+      const serverBusiness = serverBusinesses.rows.find((r: { doc: { _id: any; }; }) => r.doc?._id === business.id);
+      if (!serverBusiness) {
+        // Business exists locally but not on server - add it
+        await fetch(`${COUCHDB_URL}business`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Basic ' + btoa('usaid:beast617796')
+          },
+          body: JSON.stringify({ _id: business.id, ...business })
+        });
+      }
+    }
+
+    // Sync articles
+    for (const article of localArticles) {
+      const serverArticle = serverArticles.rows.find((r: { doc: { _id: any; }; }) => r.doc?._id === article.id);
+      if (!serverArticle) {
+        // Article exists locally but not on server - add it
+        await fetch(`${COUCHDB_URL}articles`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Basic ' + btoa('usaid:beast617796')
+          },
+          body: JSON.stringify({ _id: article.id, ...article })
+        });
+      }
+    }
+
+    // Update local database with server data
+    await loadPersistedData(db);
+  } catch (error) {
+    console.error('Sync failed:', error);
+  }
+}
+
 export const getDatabase = async () => {
   if (dbPromise) return dbPromise;
 
@@ -129,6 +185,14 @@ export const getDatabase = async () => {
     
     setupPersistence(db);
     await loadPersistedData(db);
+    await syncWithServer(db); // Initial sync attempt
+    
+    // Setup automatic sync when network changes
+    NetworkService.addListener(async (isOnline: boolean) => {
+      if (isOnline) {
+        await syncWithServer(db);
+      }
+    });
     
     console.log("Database setup complete");
     return db;

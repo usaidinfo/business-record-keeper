@@ -18,7 +18,7 @@ interface BusinessDoc {
     business_id: string;
   }
 
-const COUCHDB_URL = 'https://d594-2405-201-3037-e053-e88a-9fe7-4c12-bbb5.ngrok-free.app/';
+export const COUCHDB_URL = 'https://5cb9-2405-201-3037-e053-e88a-9fe7-4c12-bbb5.ngrok-free.app/';
 
 class ReplicationService {
   isReplicating = false;
@@ -49,7 +49,6 @@ class ReplicationService {
       console.log('Connection test successful:', data);
       return data && data.couchdb === "Welcome";
     } catch (error) {
-      console.error('Connection failed:', error instanceof Error ? error.message : 'Unknown error');
       return false;
     }
   }
@@ -58,33 +57,43 @@ class ReplicationService {
     try {
       const db = await getDatabase();
       const businesses = await db.businesses.find().exec();
-
-      console.log(`Attempting to sync ${businesses.length} businesses to CouchDB...`);
-
-      const response = await fetch(`${COUCHDB_URL}business/_bulk_docs`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Authorization': 'Basic ' + btoa('usaid:beast617796')
-        },
-        body: JSON.stringify({
-          docs: businesses.map(b => ({
-            _id: b.id,
-            _rev: (b as any)._rev,
-            name: b.name
-          }))
-        })
-      });
-
-      const responseText = await response.text();
-      console.log(`Sync response: ${response.status}, ${responseText}`);
-
-      if (!response.ok) {
-            console.log('Sync failed with status:', response.status);
-        return false;
+      
+      const unsynced = businesses.filter(b => !(b as any)._rev);
+      console.log(`Found ${unsynced.length} unsynced businesses`);
+      
+      if (unsynced.length === 0) {
+        return true;
       }
-
+  
+      for (const business of unsynced) {
+        try {
+          const response = await fetch(`${COUCHDB_URL}business`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'Authorization': 'Basic ' + btoa('usaid:beast617796')
+            },
+            body: JSON.stringify({
+              _id: business.id,
+              name: business.name
+            })
+          });
+  
+          if (response.ok) {
+            const responseData = await response.json();
+            await business.update({
+              $set: {
+                _rev: responseData.rev
+              }
+            });
+            console.log(`Synced business ${business.id} to server`);
+          }
+        } catch (error) {
+          console.log(`Failed to sync business ${business.id}:`, error);
+        }
+      }
+  
       return true;
     } catch (error) {
       console.error('Failed to sync businesses:', error);
@@ -97,7 +106,13 @@ class ReplicationService {
       const db = await getDatabase();
       const articles = await db.articles.find().exec();
       
-      console.log(`Attempting to sync ${articles.length} articles to CouchDB...`);
+      // Get only articles that don't have a _rev (not synced to server yet)
+      const unsynced = articles.filter(a => !(a as any)._rev);
+      if (unsynced.length === 0) {
+        return true;
+      }
+  
+      console.log(`Attempting to sync ${unsynced.length} unsynced articles to CouchDB...`);
       
       const response = await fetch(`${COUCHDB_URL}articles/_bulk_docs`, {
         method: 'POST',
@@ -107,7 +122,7 @@ class ReplicationService {
           'Authorization': 'Basic ' + btoa('usaid:beast617796')
         },
         body: JSON.stringify({
-          docs: articles.map(a => ({
+          docs: unsynced.map(a => ({
             _id: a.id,
             name: a.name,
             qty: a.qty,
@@ -116,18 +131,123 @@ class ReplicationService {
           }))
         })
       });
+  
+      const responseData = await response.json();
       
-      const responseText = await response.text();
-      console.log(`Article sync response: ${response.status}, ${responseText}`);
-      
-      if (!response.ok) {
-        console.log('sync error, failed to sync articles')
-        return false;
+      // Update local articles with new _rev from server
+      if (response.ok) {
+        for (let i = 0; i < unsynced.length; i++) {
+          const article = unsynced[i];
+          const serverResponse = responseData[i];
+          if (serverResponse.ok) {
+            await article.update({
+              $set: {
+                _rev: serverResponse.rev
+              }
+            });
+          }
+        }
       }
-      
-      return true;
+  
+      return response.ok;
     } catch (error) {
       console.error('Failed to sync articles:', error);
+      return false;
+    }
+  }
+
+  async fetchBusinessesFromServer() {
+    try {
+      const response = await fetch(`${COUCHDB_URL}business/_all_docs?include_docs=true`, {
+        headers: {
+          'Authorization': 'Basic ' + btoa('usaid:beast617796')
+        }
+      });
+  
+      if (!response.ok) {
+        console.log('Failed to fetch businesses from server');
+        return false;
+      }
+  
+      const data = await response.json();
+      const db = await getDatabase();
+      
+      for (const row of data.rows) {
+        const doc = row.doc;
+        if (doc) {
+          // Check if business exists
+          const existing = await db.businesses.findOne(doc._id).exec();
+          if (existing) {
+            await existing.update({
+              $set: {
+                name: doc.name,
+                _rev: doc._rev
+              }
+            });
+          } else {
+            await db.businesses.insert({
+              id: doc._id,
+              name: doc.name,
+            //@ts-ignore
+              _rev: doc._rev as string
+            });
+          }
+        }
+      }
+      return true;
+    } catch (error) {
+      console.error('Error fetching businesses:', error);
+      return false;
+    }
+  }
+  
+  async fetchArticlesFromServer() {
+    try {
+      const response = await fetch(`${COUCHDB_URL}articles/_all_docs?include_docs=true`, {
+        headers: {
+          'Authorization': 'Basic ' + btoa('usaid:beast617796')
+        }
+      });
+  
+      if (!response.ok) {
+        console.log('Failed to fetch articles from server');
+        return false;
+      }
+  
+      const data = await response.json();
+      const db = await getDatabase();
+      
+      for (const row of data.rows) {
+        const doc = row.doc;
+        if (doc) {
+          // Check if article exists
+          const existing = await db.articles.findOne(doc._id).exec();
+          if (existing) {
+            await existing.update({
+              $set: {
+                name: doc.name,
+                qty: doc.qty,
+                selling_price: doc.selling_price,
+                business_id: doc.business_id,
+                _rev: doc._rev
+              }
+            });
+          } else {
+            await db.articles.insert({
+              id: doc._id,
+              name: doc.name,
+              qty: doc.qty,
+              selling_price: doc.selling_price,
+              business_id: doc.business_id,
+              //@ts-ignore
+              _rev: doc._rev
+            });
+          }
+        }
+      }
+      return true;
+    } catch (error) {
+      console.error('Error fetching articles:', error);
       return false;
     }
   }
@@ -150,6 +270,9 @@ class ReplicationService {
         return;
       }
 
+      await this.fetchBusinessesFromServer();
+      await this.fetchArticlesFromServer();
+      
       await this.syncBusinesses();
       await this.syncArticles();
       console.log('Manual sync completed');
@@ -162,6 +285,7 @@ class ReplicationService {
 
   async createBusiness(business: any) {
     try {
+      // First try server if online
       const response = await fetch(`${COUCHDB_URL}business`, {
         method: 'POST',
         headers: {
@@ -169,42 +293,70 @@ class ReplicationService {
           'Accept': 'application/json',
           'Authorization': 'Basic ' + btoa('usaid:beast617796')
         },
-        body: JSON.stringify(business)
+        body: JSON.stringify({
+          _id: business._id,
+          name: business.name
+        })
       });
   
-      const responseText = await response.text();
-      console.log(`Create response: ${response.status}, ${responseText}`);
-  
       if (!response.ok) {
-        console.log('Create error', `failed to create business: ${response.status}` )
-        return false;
+        throw new Error(`Server responded with ${response.status}`);
       }
   
-      return true;
+      const responseData = await response.json();
+      
+      return responseData;
     } catch (error) {
-      console.error('Failed to create business:', error);
-      return false;
+      throw error;
     }
   }
 
   async updateBusiness(business: BusinessDoc) {
     try {
-      const response = await fetch(`${COUCHDB_URL}business/${business._id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Authorization': 'Basic ' + btoa('usaid:beast617796')
-        },
-        body: JSON.stringify(business)
-      });
+      const db = await getDatabase();
+      
+      let serverRev = null;
+      try {
+        const getResponse = await fetch(`${COUCHDB_URL}business/${business._id}`, {
+          headers: {
+            'Authorization': 'Basic ' + btoa('usaid:beast617796')
+          }
+        });
   
-      const responseText = await response.text();
-      console.log(`Update response: ${response.status}, ${responseText}`);
+        if (getResponse.ok) {
+          const serverDoc = await getResponse.json();
+          // Update using server's latest revision
+          const response = await fetch(`${COUCHDB_URL}business/${business._id}`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'Authorization': 'Basic ' + btoa('usaid:beast617796')
+            },
+            body: JSON.stringify({
+              ...business,
+              _rev: serverDoc._rev
+            })
+          });
   
-      if (!response.ok) {
-        console.log('Update Error', `Failed to update business: ${response.status}`)
-        return false;
+          if (response.ok) {
+            const responseData = await response.json();
+            serverRev = responseData.rev;
+          }
+        }
+      } catch (error) {
+        console.log('Server update failed, updating locally only:', error);
+      }
+  
+      // Update local database
+      const existingBusiness = await db.businesses.findOne(business._id).exec();
+      if (existingBusiness) {
+        await existingBusiness.update({
+          $set: {
+            name: business.name,
+            _rev: serverRev || existingBusiness.get('_rev')
+          }
+        });
       }
   
       return true;
@@ -217,41 +369,53 @@ class ReplicationService {
   async deleteBusiness(businessId: string, businessRev: string) {
     try {
       const db = await getDatabase();
-      const articles = await db.articles.find().where('business_id').eq(businessId).exec();
       
+      const articles = await db.articles.find().where('business_id').eq(businessId).exec();
       for (const article of articles) {
-        await article.remove();
-        
         try {
-          const response = await fetch(`${COUCHDB_URL}articles/${article.id}?rev=${article.get('_rev')}`, {
-            method: 'DELETE',
-            headers: {
-              'Authorization': 'Basic ' + btoa('usaid:beast617796')
+          try {
+            const getArtResponse = await fetch(`${COUCHDB_URL}articles/${article.id}`, {
+              headers: { 'Authorization': 'Basic ' + btoa('usaid:beast617796') }
+            });
+            
+            if (getArtResponse.ok) {
+              const serverArt = await getArtResponse.json();
+              await fetch(`${COUCHDB_URL}articles/${article.id}?rev=${serverArt._rev}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Basic ' + btoa('usaid:beast617796') }
+              });
             }
-          });
-          
-          if (!response.ok) {
-            console.log(`Article ${article.id} already deleted from server or not found`);
+          } catch (err) {
+            console.log(`Server article delete failed: ${err}`);
           }
+          
+          await article.remove();
         } catch (error) {
-          console.log(`Skipping server delete for article ${article.id}`);
+          console.log(`Error deleting article ${article.id}:`, error);
         }
+      }
+  
+      let serverDeleted = false;
+      try {
+        const getResponse = await fetch(`${COUCHDB_URL}business/${businessId}`, {
+          headers: { 'Authorization': 'Basic ' + btoa('usaid:beast617796') }
+        });
+  
+        if (getResponse.ok) {
+          const serverDoc = await getResponse.json();
+          const deleteResponse = await fetch(`${COUCHDB_URL}business/${businessId}?rev=${serverDoc._rev}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': 'Basic ' + btoa('usaid:beast617796') }
+          });
+          serverDeleted = deleteResponse.ok;
+        }
+      } catch (error) {
+        console.log('Server delete failed:', error);
       }
   
       const business = await db.businesses.findOne(businessId).exec();
       if (business) {
         await business.remove();
-      }
-  
-      const response = await fetch(`${COUCHDB_URL}business/${businessId}?rev=${businessRev}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': 'Basic ' + btoa('usaid:beast617796')
-        }
-      });
-  
-      if (!response.ok) {
-        console.log('Business might already be deleted from server');
       }
   
       return true;
@@ -298,47 +462,33 @@ class ReplicationService {
     }
   }
   
-//   async resetAllData() {
+//   async resetLocalData() {
 //     try {
 //       const db = await getDatabase();
       
-//       // First clear AsyncStorage
-//       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-//       await AsyncStorage.clear();
-      
-//       // Remove all documents if collections exist
+//       // Remove all businesses and articles from RxDB
 //       if (db.businesses) {
 //         await db.businesses.remove({});
 //       }
 //       if (db.articles) {
 //         await db.articles.remove({});
 //       }
+  
+//       // Clear specific AsyncStorage keys
+//       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+//       const keys = await AsyncStorage.getAllKeys();
+//       const businessAndArticleKeys = keys.filter(key => 
+//         key.includes('business') || key.includes('article')
+//       );
+//       await AsyncStorage.multiRemove(businessAndArticleKeys);
       
-//       // Destroy the current database
-//       await db.destroy();
-      
-//       // Force a new database initialization
-//       const newDb = await getDatabase();
-      
-//       // Create new collections
-//       await newDb.addCollections({
-//         businesses: {
-//           schema: require('../database/models/businessSchema').default
-//         },
-//         articles: {
-//           schema: require('../database/models/articleSchema').default
-//         }
-//       });
-      
-//       console.log('Database reset and reinitialized successfully');
-//       Alert.alert('Success', 'Database has been reset. Please restart the app.');
+//       console.log('Local data reset successfully');
 //       return true;
 //     } catch (error) {
-//       console.error('Failed to reset data:', error);
-//       Alert.alert('Error', `Failed to reset data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+//       console.error('Failed to reset local data:', error);
 //       return false;
 //     }
 //   }
-}
+}   
 
 export default new ReplicationService();
