@@ -5,7 +5,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { ArticleListScreenProps } from '../types/navigation';
 import { Article } from '../database/models/articleSchema';
 import { RxDocument } from 'rxdb';
-import Icon from 'react-native-vector-icons/Ionicons';
+import { Ionicons } from '@expo/vector-icons';
+import ReplicationService from '~/services/ReplicationService';
 
 type ArticleDocument = RxDocument<Article>;
 
@@ -45,13 +46,23 @@ const ArticleListScreen: React.FC<ArticleListScreenProps> = ({ route }) => {
     
     try {
       const db = await getDatabase();
-      await db.articles.insert({
-        id: uuidv4(),
+      const articleId = uuidv4();
+      const newArticleDoc = await db.articles.insert({
+        id: articleId,
         name: newArticle.name.trim(),
         qty: parseInt(newArticle.qty, 10),
         selling_price: parseFloat(newArticle.selling_price),
         business_id: businessId
       });
+
+      await ReplicationService.createArticle({
+        _id: articleId,
+        name: newArticle.name.trim(),
+        qty: parseInt(newArticle.qty, 10),
+        selling_price: parseFloat(newArticle.selling_price),
+        business_id: businessId
+      });
+
       setNewArticle({ name: '', qty: '', selling_price: '' });
       setShowForm(false);
       loadArticles();
@@ -112,7 +123,7 @@ const ArticleListScreen: React.FC<ArticleListScreenProps> = ({ route }) => {
       </View>
     )
   )}
-  ListEmptyComponent={
+  ListEmptyComponent={() => 
     !loading && <Text style={styles.emptyText}>No articles found. Add one above!</Text>
   }
 />
@@ -121,7 +132,7 @@ const ArticleListScreen: React.FC<ArticleListScreenProps> = ({ route }) => {
         style={styles.floatingButton}
         onPress={() => setShowForm(!showForm)}
       >
-        <Icon name={showForm ? "close" : "add"} size={30} color="#fff" />
+        <Ionicons name={showForm ? "close" : "add"} size={30} color="#fff" />
       </TouchableOpacity>
     </View>
   );

@@ -25,7 +25,7 @@ npm start
 4. Use Expo Go app on your mobile device to scan the QR code, or press 'a' in the terminal to open in Android emulator.
 
 ## Demo Video 🎥
-[Watch Demo Video](D:\react-native\my-expo-app\Screenrecorder-2025-03-30-17-18-03-130.mp4)
+https://jmp.sh/s/WNg2pSiiUg4WKzSFyLlJ
 
 ## APK Download 📱
 https://expo.dev/accounts/musaid1234/projects/business-record-keeper/builds/d2439d23-3504-4213-a552-8f58ba95064b

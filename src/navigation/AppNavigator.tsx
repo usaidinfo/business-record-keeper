@@ -6,7 +6,6 @@ import ArticleListScreen from '../screens/ArticleListScreen';
 import { RootStackParamList } from '../types/navigation';
 import NetworkStatus from '../components/NetworkStatus';
 import { StyleSheet } from 'react-native';
-import Icon from 'react-native-vector-icons/Ionicons';
 
 const Stack = createStackNavigator<RootStackParamList>();
 

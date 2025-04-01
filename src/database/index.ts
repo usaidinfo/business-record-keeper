@@ -9,6 +9,7 @@ import { articleSchema, Article } from './models/articleSchema';
 import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv'; 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RxDBUpdatePlugin } from 'rxdb/plugins/update';
+import { replicateCouchDB } from 'rxdb/plugins/replication-couchdb';
 
 addRxPlugin(RxDBQueryBuilderPlugin);
 addRxPlugin(RxDBDevModePlugin);

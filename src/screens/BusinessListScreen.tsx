@@ -5,7 +5,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { BusinessListScreenProps } from '../types/navigation';
 import { Business } from '../database/models/businessSchema';
 import { RxDocument } from 'rxdb';
-import Icon from 'react-native-vector-icons/Ionicons';
+import { Ionicons } from '@expo/vector-icons';
+import ReplicationService from '../services/ReplicationService';
 
 type BusinessDocument = RxDocument<Business>;
 
@@ -19,6 +20,7 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
   useEffect(() => {
     loadBusinesses();
   }, []);
+  
 
   const loadBusinesses = async () => {
     try {
@@ -41,10 +43,17 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
     
     try {
       const db = await getDatabase();
-      await db.businesses.insert({
+      const newBusiness = await db.businesses.insert({
         id: uuidv4(),
         name: newBusinessName.trim()
       });
+      
+      // Sync with server
+      await ReplicationService.createBusiness({
+        _id: newBusiness.id,
+        name: newBusiness.name
+      });
+      
       setNewBusinessName('');
       setShowForm(false);
       loadBusinesses();
@@ -57,6 +66,9 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
   const handleDeleteBusiness = async (business: BusinessDocument) => {
     try {
       await business.remove();
+      
+      await ReplicationService.deleteBusiness(business.id, business.get('_rev'));
+      
       loadBusinesses();
     } catch (error) {
       console.error('Error deleting business:', error);
@@ -74,6 +86,13 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
       await editingBusiness.update({
         $set: { name: newBusinessName.trim() }
       });
+  
+      await ReplicationService.updateBusiness({
+        _id: editingBusiness.id,
+        name: newBusinessName.trim(),
+        _rev: editingBusiness.get('_rev')
+      });
+  
       setNewBusinessName('');
       setEditingBusiness(null);
       setShowForm(false);
@@ -133,7 +152,7 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
                   }}
                   className={styles.iconButton}
                 >
-                  <Icon name="pencil" size={20} color="#3498db" />
+                  <Ionicons name="pencil" size={20} color="#3498db" />
                 </TouchableOpacity>
                 <TouchableOpacity 
                   onPress={() => {
@@ -148,13 +167,13 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
                   }}
                   className={styles.iconButton}
                 >
-                  <Icon name="trash" size={20} color="#e74c3c" />
+                  <Ionicons name="trash" size={20} color="#e74c3c" />
                 </TouchableOpacity>
               </View>
             </View>
           </TouchableOpacity>
         )}
-        ListEmptyComponent={
+        ListEmptyComponent={() =>
           !loading && <Text className={styles.emptyText}>No businesses found. Add one above!</Text>
         }
       />
@@ -163,7 +182,7 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
         className={styles.floatingButton}
         onPress={() => setShowForm(!showForm)}
       >
-        <Icon name={showForm ? "close" : "add"} size={30} color="#fff" />
+        <Ionicons name={showForm ? "close" : "add"} size={30} color="#fff" />
       </TouchableOpacity>
     </View>
   );
