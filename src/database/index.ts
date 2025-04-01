@@ -104,7 +104,8 @@ async function loadPersistedData(db: RxDatabase<BusinessRecordDatabase>) {
 
 async function syncWithServer(db: RxDatabase<BusinessRecordDatabase>) {
   try {
-    // First try to fetch from server
+    console.log('Starting database sync with server...');
+
     const [serverBusinesses, serverArticles] = await Promise.all([
       fetch(`${COUCHDB_URL}business/_all_docs?include_docs=true`, {
         headers: { 'Authorization': 'Basic ' + btoa('usaid:beast617796') }
@@ -139,18 +140,71 @@ async function syncWithServer(db: RxDatabase<BusinessRecordDatabase>) {
       const serverArticle = serverArticles.rows.find((r: { doc: { _id: any; }; }) => r.doc?._id === article.id);
       if (!serverArticle) {
         // Article exists locally but not on server - add it
-        await fetch(`${COUCHDB_URL}articles`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Basic ' + btoa('usaid:beast617796')
-          },
-          body: JSON.stringify({ _id: article.id, ...article })
-        });
+        try {
+          await fetch(`${COUCHDB_URL}articles`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Basic ' + btoa('usaid:beast617796')
+            },
+            body: JSON.stringify({ 
+              _id: article.id, 
+              name: article.name,
+              qty: article.qty,
+              selling_price: article.selling_price,
+              business_id: article.business_id 
+            })
+          });
+          console.log(`Synced article ${article.id} to server`);
+          
+          // Update local record with sync status
+          const localArticleDoc = await db.articles.findOne(article.id).exec();
+          if (localArticleDoc) {
+            await localArticleDoc.update({
+              $set: { _synced: true }
+            });
+          }
+        } catch (error) {
+          console.log(`Failed to sync article ${article.id} to server:`, error);
+        }
       }
     }
 
-    // Update local database with server data
+    for (const row of serverBusinesses.rows || []) {
+      if (row.doc && !localBusinesses.some((b: { id: any; }) => b.id === row.doc._id)) {
+        try {
+          await db.businesses.upsert({
+            id: row.doc._id,
+            name: row.doc.name,
+            //@ts-ignore
+            _rev: row.doc._rev
+          });
+          console.log(`Added server business ${row.doc._id} to local database`);
+        } catch (error) {
+          console.error(`Error adding server business ${row.doc._id} to local:`, error);
+        }
+      }
+    }
+
+    for (const row of serverArticles.rows || []) {
+      if (row.doc && !localArticles.some((a: { id: any; }) => a.id === row.doc._id)) {
+        try {
+          await db.articles.upsert({
+            id: row.doc._id,
+            name: row.doc.name,
+            qty: row.doc.qty,
+            selling_price: row.doc.selling_price,
+            business_id: row.doc.business_id,
+            //@ts-ignore
+            _rev: row.doc._rev
+          });
+          console.log(`Added server article ${row.doc._id} to local database`);
+        } catch (error) {
+          console.error(`Error adding server article ${row.doc._id} to local:`, error);
+        }
+      }
+    }
+
     await loadPersistedData(db);
   } catch (error) {
     console.error('Sync failed:', error);

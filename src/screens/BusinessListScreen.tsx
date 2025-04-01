@@ -6,7 +6,9 @@ import { BusinessListScreenProps } from '../types/navigation';
 import { Business } from '../database/models/businessSchema';
 import { RxDocument } from 'rxdb';
 import { Ionicons } from '@expo/vector-icons';
-import ReplicationService from '../services/ReplicationService';
+import ReplicationService, { COUCHDB_URL } from '../services/ReplicationService';
+import NetworkService from '~/services/NetworkService';
+
 
 type BusinessDocument = RxDocument<Business>;
 
@@ -21,6 +23,7 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
     loadBusinesses();
   }, []);
 
+  
 
   
 
@@ -92,7 +95,6 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
     try {
       const db = await getDatabase();
       
-      // Delete associated articles locally first
       const articles = await db.articles.find().where('business_id').eq(business.id).exec();
       for (const article of articles) {
         await article.update({
@@ -100,7 +102,6 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
         });
       }
   
-      // Mark business for deletion locally
       const businessDoc = await db.businesses.findOne(business.id).exec();
       if (businessDoc) {
         await businessDoc.update({
@@ -108,10 +109,8 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
         });
       }
   
-      // Try server delete if online
       try {
         await ReplicationService.deleteBusiness(business.id, business.get('_rev'));
-        // If server delete successful, remove locally
         if (businessDoc) {
           await businessDoc.remove();
         }
@@ -136,15 +135,58 @@ const BusinessListScreen: React.FC<BusinessListScreenProps> = ({ navigation }) =
     }
     
     try {
+      // Just update locally first
       await editingBusiness.update({
         $set: { name: newBusinessName.trim() }
       });
-  
-      await ReplicationService.updateBusiness({
-        _id: editingBusiness.id,
-        name: newBusinessName.trim(),
-        _rev: editingBusiness.get('_rev')
-      });
+      
+      console.log(`Local update of business "${editingBusiness.id}" successful`);
+      
+      // Only try server update if online
+      if (NetworkService.isOnline()) {
+        try {
+          console.log(`Attempting server update for business "${editingBusiness.id}"`);
+          console.log(`Using CouchDB URL: ${COUCHDB_URL}`);
+          
+          // First check server connectivity
+          const testFetch = await fetch(`${COUCHDB_URL}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': 'Basic ' + btoa('usaid:beast617796')
+            }
+          }).catch(error => {
+            console.error('Initial connectivity test failed:', error);
+            return null;
+          });
+          
+          if (!testFetch || !testFetch.ok) {
+            console.error('Server not reachable for update');
+            Alert.alert('Warning', 'Business updated locally but server sync failed');
+            return;
+          }
+          
+          // Proceed with actual update
+          await ReplicationService.updateBusiness({
+            _id: editingBusiness.id,
+            name: newBusinessName.trim(),
+            _rev: editingBusiness.get('_rev')
+          });
+          
+          console.log(`Server update successful for business "${editingBusiness.id}"`);
+        } catch (error) {
+          console.error('Server update error:', error);
+          Alert.alert(
+            'Warning', 
+            'Business updated locally but server sync failed. Changes will sync later when connection is available.'
+          );
+        }
+      } else {
+        console.log('Offline - skipping server update');
+        Alert.alert(
+          'Offline Mode', 
+          'Business updated locally. Changes will sync when you reconnect.'
+        );
+      }
   
       setNewBusinessName('');
       setEditingBusiness(null);

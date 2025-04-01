@@ -96,7 +96,7 @@ class ReplicationService {
   
       return true;
     } catch (error) {
-      console.error('Failed to sync businesses:', error);
+      console.log('Failed to sync businesses:', error);
       return false;
     }
   }
@@ -109,49 +109,97 @@ class ReplicationService {
       // Get only articles that don't have a _rev (not synced to server yet)
       const unsynced = articles.filter(a => !(a as any)._rev);
       if (unsynced.length === 0) {
+        console.log('No unsynced articles to sync');
         return true;
       }
   
       console.log(`Attempting to sync ${unsynced.length} unsynced articles to CouchDB...`);
       
-      const response = await fetch(`${COUCHDB_URL}articles/_bulk_docs`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Authorization': 'Basic ' + btoa('usaid:beast617796')
-        },
-        body: JSON.stringify({
-          docs: unsynced.map(a => ({
-            _id: a.id,
-            name: a.name,
-            qty: a.qty,
-            selling_price: a.selling_price,
-            business_id: a.business_id
-          }))
-        })
-      });
-  
-      const responseData = await response.json();
+      // First, check if the endpoint exists and is accessible
+      try {
+        const testResponse = await fetch(`${COUCHDB_URL}articles`, {
+          method: 'HEAD',
+          headers: {
+            'Authorization': 'Basic ' + btoa('usaid:beast617796')
+          }
+        });
+        
+        if (!testResponse.ok) {
+          console.log('Articles collection not accessible, aborting sync');
+          return false;
+        }
+      } catch (error) {
+        console.log('Could not reach articles collection:', error);
+        return false;
+      }
       
-      // Update local articles with new _rev from server
-      if (response.ok) {
-        for (let i = 0; i < unsynced.length; i++) {
-          const article = unsynced[i];
-          const serverResponse = responseData[i];
-          if (serverResponse.ok) {
-            await article.update({
-              $set: {
-                _rev: serverResponse.rev
-              }
+      // Try to sync each article individually to handle different error cases
+      for (const article of unsynced) {
+        try {
+          const articleData = {
+            _id: article.id,
+            name: article.name,
+            qty: article.qty,
+            selling_price: article.selling_price,
+            business_id: article.business_id
+          };
+          
+          // Check if this article already exists on the server (maybe from another device)
+          const checkResponse = await fetch(`${COUCHDB_URL}articles/${article.id}`, {
+            headers: {
+              'Authorization': 'Basic ' + btoa('usaid:beast617796')
+            }
+          }).catch(() => ({ ok: false }));
+          
+          let response;
+          if (checkResponse.ok) {
+            // Article exists, need to update with current revision
+            const serverArticle = checkResponse instanceof Response ? await checkResponse.json() : null
+            response = await fetch(`${COUCHDB_URL}articles/${article.id}`, {
+              method: 'PUT',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Authorization': 'Basic ' + btoa('usaid:beast617796')
+              },
+              body: JSON.stringify({
+                ...articleData,
+                _rev: serverArticle._rev
+              })
+            });
+          } else {
+            // Article doesn't exist, create it
+            response = await fetch(`${COUCHDB_URL}articles`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Authorization': 'Basic ' + btoa('usaid:beast617796')
+              },
+              body: JSON.stringify(articleData)
             });
           }
+          
+          if (response.ok) {
+            const responseData = await response.json();
+            // Update local article with the server revision
+            await article.update({
+              $set: {
+                _rev: responseData.rev
+              }
+            });
+            console.log(`Successfully synced article ${article.id}`);
+          } else {
+            console.log(`Failed to sync article ${article.id}: ${response.status}`);
+          }
+        } catch (error) {
+          console.log(`Error syncing article ${article.id}:`, error);
         }
       }
   
-      return response.ok;
+      return true;
     } catch (error) {
-      console.error('Failed to sync articles:', error);
+      console.log('Failed to sync articles:', error);
       return false;
     }
   }
@@ -196,7 +244,7 @@ class ReplicationService {
       }
       return true;
     } catch (error) {
-      console.error('Error fetching businesses:', error);
+      console.log('Error fetching businesses:', error);
       return false;
     }
   }
@@ -247,7 +295,7 @@ class ReplicationService {
       }
       return true;
     } catch (error) {
-      console.error('Error fetching articles:', error);
+      console.log('Error fetching articles:', error);
       return false;
     }
   }
@@ -434,21 +482,25 @@ class ReplicationService {
           'Accept': 'application/json',
           'Authorization': 'Basic ' + btoa('usaid:beast617796')
         },
-        body: JSON.stringify(article)
+        body: JSON.stringify({
+          _id: article._id,
+          name: article.name,
+          qty: article.qty,
+          selling_price: article.selling_price,
+          business_id: article.business_id
+        })
       });
   
-      const responseText = await response.text();
-      console.log(`Create article response: ${response.status}, ${responseText}`);
-  
       if (!response.ok) {
-        console.log('Create  error', `failed to create article: ${response.status}` )
-        return false;
+        throw new Error(`Server responded with ${response.status}`);
       }
   
-      return true;
+      const responseData = await response.json();
+      return responseData; // Return the server response with the _rev
+  
     } catch (error) {
-      console.error('Failed to create article:', error);
-      return false;
+      console.log('Failed to create article on server:', error);
+      throw error;
     }
   }
   

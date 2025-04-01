@@ -7,6 +7,7 @@ import { Article } from '../database/models/articleSchema';
 import { RxDocument } from 'rxdb';
 import { Ionicons } from '@expo/vector-icons';
 import ReplicationService from '~/services/ReplicationService';
+import NetworkService from '~/services/NetworkService';
 
 type ArticleDocument = RxDocument<Article>;
 
@@ -16,9 +17,17 @@ const ArticleListScreen: React.FC<ArticleListScreenProps> = ({ route }) => {
   const [loading, setLoading] = useState(true);
   const [newArticle, setNewArticle] = useState({ name: '', qty: '', selling_price: '' });
   const [showForm, setShowForm] = useState(false);
+  const [isOnline, setIsOnline] = useState(NetworkService.isOnline());
 
   useEffect(() => {
     loadArticles();
+    
+    // Listen for network status changes
+    const unsubscribe = NetworkService.addListener((status) => {
+      setIsOnline(status);
+    });
+    
+    return unsubscribe;
   }, [businessId]);
 
   const loadArticles = async () => {
@@ -47,6 +56,8 @@ const ArticleListScreen: React.FC<ArticleListScreenProps> = ({ route }) => {
     try {
       const db = await getDatabase();
       const articleId = uuidv4();
+      
+      // Insert into local RxDB first
       const newArticleDoc = await db.articles.insert({
         id: articleId,
         name: newArticle.name.trim(),
@@ -55,13 +66,33 @@ const ArticleListScreen: React.FC<ArticleListScreenProps> = ({ route }) => {
         business_id: businessId
       });
 
-      await ReplicationService.createArticle({
-        _id: articleId,
-        name: newArticle.name.trim(),
-        qty: parseInt(newArticle.qty, 10),
-        selling_price: parseFloat(newArticle.selling_price),
-        business_id: businessId
-      });
+      // Try to sync with CouchDB if we're online
+      if (isOnline) {
+        try {
+          const serverResult = await ReplicationService.createArticle({
+            _id: articleId,
+            name: newArticle.name.trim(),
+            qty: parseInt(newArticle.qty, 10),
+            selling_price: parseFloat(newArticle.selling_price),
+            business_id: businessId
+          });
+          
+          //@ts-ignore
+          if (serverResult && serverResult.rev) {
+            await newArticleDoc.update({
+              $set: {
+                  //@ts-ignore
+                _rev: serverResult.rev
+              }
+            });
+          }
+        } catch (error) {
+          console.log('Server sync failed, article will sync later when online', error);
+          // The article is already in local database and will be synced later
+        }
+      } else {
+        console.log('Offline mode: Article saved locally and will sync when online');
+      }
 
       setNewArticle({ name: '', qty: '', selling_price: '' });
       setShowForm(false);
@@ -107,26 +138,31 @@ const ArticleListScreen: React.FC<ArticleListScreenProps> = ({ route }) => {
         </View>
       )}
 
-<FlatList
-  data={loading ? Array(5).fill({}) : articles}
-  keyExtractor={(item, index) => loading ? `skeleton-${index}` : item.id}
-  renderItem={({ item }) => (
-    loading ? (
-      <View style={styles.skeletonItem}>
-        <View style={styles.skeletonText} />
-        <View style={styles.skeletonShortText} />
-      </View>
-    ) : (
-      <View style={styles.articleItem}>
-        <Text style={styles.articleName}>{item.name}</Text>
-        <Text style={styles.articleDetails}>Qty: {item.qty} | Price: ${item.selling_price}</Text>
-      </View>
-    )
-  )}
-  ListEmptyComponent={() => 
-    !loading && <Text style={styles.emptyText}>No articles found. Add one above!</Text>
-  }
-/>
+      <FlatList
+        data={loading ? Array(5).fill({}) : articles}
+        keyExtractor={(item, index) => loading ? `skeleton-${index}` : item.id}
+        renderItem={({ item }) => (
+          loading ? (
+            <View style={styles.skeletonItem}>
+              <View style={styles.skeletonText} />
+              <View style={styles.skeletonShortText} />
+            </View>
+          ) : (
+            <View style={styles.articleItem}>
+              <Text style={styles.articleName}>{item.name}</Text>
+              <Text style={styles.articleDetails}>Qty: {item.qty} | Price: ${item.selling_price}</Text>
+              {!item._rev && !isOnline && (
+                <View style={styles.pendingSyncBadge}>
+                  <Text style={styles.pendingSyncText}>Pending Sync</Text>
+                </View>
+              )}
+            </View>
+          )
+        )}
+        ListEmptyComponent={() => 
+          !loading && <Text style={styles.emptyText}>No articles found. Add one above!</Text>
+        }
+      />
 
       <TouchableOpacity
         style={styles.floatingButton}
@@ -185,6 +221,7 @@ const styles = StyleSheet.create({
     borderLeftColor: '#3498db',
     borderBottomWidth: 1,
     borderBottomColor: '#ecf0f1',
+    position: 'relative',
   },
   articleName: {
     fontSize: 16,
@@ -232,6 +269,20 @@ const styles = StyleSheet.create({
     height: 14,
     borderRadius: 4,
     width: '60%',
+  },
+  pendingSyncBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: '#f39c12',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  pendingSyncText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '500',
   },
 });
 
